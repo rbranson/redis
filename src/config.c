@@ -185,9 +185,16 @@ void loadServerConfig(char *filename) {
                 server.appendfsync = APPENDFSYNC_ALWAYS;
             } else if (!strcasecmp(argv[1],"everysec")) {
                 server.appendfsync = APPENDFSYNC_EVERYSEC;
+            } else if (!strcasecmp(argv[1],"group")) {
+                server.appendfsync = APPENDFSYNC_GROUP;
             } else {
-                err = "argument must be 'no', 'always' or 'everysec'";
+                err = "argument must be 'no', 'always', 'group', or 'everysec'";
                 goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "appendfsync-group-commit-delay")) {
+            server.aof_group_commit_delay = atoi(argv[1]);
+            if (server.aof_group_commit_delay < 1) {
+                err = "Invalid group commit delay"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             server.requirepass = zstrdup(argv[1]);
@@ -292,9 +299,15 @@ void configSetCommand(redisClient *c) {
             server.appendfsync = APPENDFSYNC_EVERYSEC;
         } else if (!strcasecmp(o->ptr,"always")) {
             server.appendfsync = APPENDFSYNC_ALWAYS;
+        } else if (!strcasecmp(o->ptr,"group")) {
+            server.appendfsync = APPENDFSYNC_GROUP;
         } else {
             goto badfmt;
         }
+    } else if (!strcasecmp(c->argv[2]->ptr, "appendfsync-group-commit-delay")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
+            ll < 0 || ll > LONG_MAX) goto badfmt;
+        server.aof_group_commit_delay = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"no-appendfsync-on-rewrite")) {
         int yn = yesnotoi(o->ptr);
 
@@ -433,6 +446,12 @@ void configGetCommand(redisClient *c) {
         addReplyBulkCString(c,server.no_appendfsync_on_rewrite ? "yes" : "no");
         matches++;
     }
+    if (stringmatch(pattern,"appendfsync-group-commit-delay",0)) {
+        snprintf(buf,sizeof(buf),"%i",server.aof_group_commit_delay);
+        addReplyBulkCString(c,"appendfsync-group-commit-delay");
+        addReplyBulkCString(c,buf);
+        matches++;
+    }
     if (stringmatch(pattern,"appendfsync",0)) {
         char *policy;
 
@@ -440,6 +459,7 @@ void configGetCommand(redisClient *c) {
         case APPENDFSYNC_NO: policy = "no"; break;
         case APPENDFSYNC_EVERYSEC: policy = "everysec"; break;
         case APPENDFSYNC_ALWAYS: policy = "always"; break;
+        case APPENDFSYNC_GROUP: policy = "group"; break;
         default: policy = "unknown"; break; /* too harmless to panic */
         }
         addReplyBulkCString(c,"appendfsync");

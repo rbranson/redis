@@ -35,7 +35,7 @@ void stopAppendOnly(void) {
  * at runtime using the CONFIG command. */
 int startAppendOnly(void) {
     server.appendonly = 1;
-    server.lastfsync = time(NULL);
+    server.lastfsync = getHighResolutionTime();
     server.appendfd = open(server.appendfilename,O_WRONLY|O_APPEND|O_CREAT,0644);
     if (server.appendfd == -1) {
         redisLog(REDIS_WARNING,"Used tried to switch on AOF via CONFIG, but I can't open the AOF file: %s",strerror(errno));
@@ -50,6 +50,30 @@ int startAppendOnly(void) {
     return REDIS_OK;
 }
 
+/* after we fsync, unmark all clients waiting on the AOF */
+void _flushAppendOnlyFileWaitingClients(void) {
+    if (server.aof_group_pending == 0) return;
+    
+    listIter li;
+    listNode *ln;
+    
+    listRewind(server.clients, &li);
+
+    while((ln = listNext(&li))) {
+        redisClient *c = ln->value;
+        
+        if (c->flags & REDIS_AOF_WAIT) {
+            c->flags &= (~REDIS_AOF_WAIT);
+            server.aof_group_pending--;
+        }
+    }
+}
+
+void _flushAppendOnlyFileFsync(void) {
+    aof_fsync(server.appendfd);
+    server.lastfsync = getHighResolutionTime();
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -58,10 +82,17 @@ int startAppendOnly(void) {
  * buffer and write it on disk using this function just before entering
  * the event loop again. */
 void flushAppendOnlyFile(void) {
-    time_t now;
+    uint64_t now;
     ssize_t nwritten;
+    
+    now = getHighResolutionTime();
 
-    if (sdslen(server.aofbuf) == 0) return;
+    if (sdslen(server.aofbuf) == 0) {
+        if ((now - server.lastfsync) > (unsigned int)server.aof_group_commit_delay) {
+            _flushAppendOnlyFileWaitingClients();
+        }
+        return;
+    }
 
     /* We want to perform a single write. This should be guaranteed atomic
      * at least if the filesystem we are writing is a real physical one.
@@ -88,16 +119,18 @@ void flushAppendOnlyFile(void) {
     if (server.no_appendfsync_on_rewrite &&
         (server.bgrewritechildpid != -1 || server.bgsavechildpid != -1))
             return;
+
     /* Fsync if needed */
-    now = time(NULL);
     if (server.appendfsync == APPENDFSYNC_ALWAYS ||
         (server.appendfsync == APPENDFSYNC_EVERYSEC &&
-         now-server.lastfsync > 1))
+         now - server.lastfsync > 1000000))
     {
-        /* aof_fsync is defined as fdatasync() for Linux in order to avoid
-         * flushing metadata. */
-        aof_fsync(server.appendfd); /* Let's try to get this data on the disk */
-        server.lastfsync = now;
+        _flushAppendOnlyFileFsync();
+    }
+    else if (server.appendfsync == APPENDFSYNC_GROUP &&
+             (now - server.lastfsync) > (unsigned int)server.aof_group_commit_delay) {
+        _flushAppendOnlyFileFsync();
+        _flushAppendOnlyFileWaitingClients();        
     }
 }
 

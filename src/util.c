@@ -1,6 +1,7 @@
 #include "redis.h"
 #include <ctype.h>
 #include <limits.h>
+#include <sys/time.h>
 
 /* Glob-style pattern matching. */
 int stringmatchlen(const char *pattern, int patternLen,
@@ -240,4 +241,11 @@ int isObjectRepresentableAsLongLong(robj *o, long long *llongval) {
     } else {
         return isStringRepresentableAsLongLong(o->ptr,llongval);
     }
+}
+
+/* Returns a 64-bit timer in microseconds since epoch time */
+uint64_t getHighResolutionTime() {
+    struct timeval tv;    
+    gettimeofday(&tv, NULL);
+    return (tv.tv_sec * 1000000) + tv.tv_usec;
 }

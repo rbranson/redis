@@ -144,6 +144,7 @@
 #define REDIS_BLOCKED 16    /* The client is waiting in a blocking operation */
 #define REDIS_IO_WAIT 32    /* The client is waiting for Virtual Memory I/O */
 #define REDIS_DIRTY_CAS 64  /* Watched keys modified. EXEC will fail. */
+#define REDIS_AOF_WAIT 128  /* The client is waiting for an AOF flush */
 
 /* Slave replication state - slave side */
 #define REDIS_REPL_NONE 0   /* No active replication */
@@ -185,6 +186,7 @@
 #define APPENDFSYNC_NO 0
 #define APPENDFSYNC_ALWAYS 1
 #define APPENDFSYNC_EVERYSEC 2
+#define APPENDFSYNC_GROUP 3
 
 /* Zip structure related defaults */
 #define REDIS_HASH_MAX_ZIPMAP_ENTRIES 64
@@ -375,7 +377,7 @@ struct redisServer {
     int appendfsync;
     int no_appendfsync_on_rewrite;
     int shutdown_asap;
-    time_t lastfsync;
+    int64_t lastfsync;
     int appendfd;
     int appendseldb;
     char *pidfile;
@@ -461,6 +463,9 @@ struct redisServer {
     FILE *devnull;
     unsigned lruclock:22;        /* clock incrementing every minute, for LRU */
     unsigned lruclock_padding:10;
+    
+    int aof_group_pending; /* number of AOF clients waiting on commit */
+    int aof_group_commit_delay; /* number of seconds to delay between group commits */
 };
 
 typedef struct pubsubPattern {
@@ -816,6 +821,7 @@ int ll2string(char *s, size_t len, long long value);
 int isStringRepresentableAsLong(sds s, long *longval);
 int isStringRepresentableAsLongLong(sds s, long long *longval);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
+uint64_t getHighResolutionTime();
 
 /* Configuration */
 void loadServerConfig(char *filename);

@@ -545,6 +545,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             listLength(server.clients)-listLength(server.slaves),
             listLength(server.slaves),
             zmalloc_used_memory());
+            
+        redisLog(REDIS_VERBOSE, "%i clients pending AOF commit, time since last fsync: %fs",
+            server.aof_group_pending,
+            (double)((getHighResolutionTime() - server.lastfsync) / 1000000)
+        );
     }
 
     /* Close connections of timedout clients */
@@ -725,7 +730,8 @@ void initServerConfig() {
     server.appendonly = 0;
     server.appendfsync = APPENDFSYNC_EVERYSEC;
     server.no_appendfsync_on_rewrite = 0;
-    server.lastfsync = time(NULL);
+    server.aof_group_commit_delay = 10000; /* 10ms default */
+    server.lastfsync = getHighResolutionTime();
     server.appendfd = -1;
     server.appendseldb = -1; /* Make sure the first time will not match */
     server.pidfile = zstrdup("/var/run/redis.pid");
@@ -817,6 +823,7 @@ void initServer() {
     server.bgrewritechildpid = -1;
     server.bgrewritebuf = sdsempty();
     server.aofbuf = sdsempty();
+    server.aof_group_pending = 0;
     server.lastsave = time(NULL);
     server.dirty = 0;
     server.stat_numcommands = 0;
@@ -877,8 +884,16 @@ void call(redisClient *c, struct redisCommand *cmd) {
     cmd->proc(c);
     dirty = server.dirty-dirty;
 
-    if (server.appendonly && dirty)
+    if (server.appendonly && dirty) {
         feedAppendOnlyFile(cmd,c->db->id,c->argv,c->argc);
+        
+        /* TODO: Use a special aof_wait client list */
+        if (server.appendfsync == APPENDFSYNC_GROUP) {
+            c->flags |= REDIS_AOF_WAIT;
+            server.aof_group_pending++;
+        }
+    }
+    
     if ((dirty || cmd->flags & REDIS_CMD_FORCE_REPLICATION) &&
         listLength(server.slaves))
         replicationFeedSlaves(server.slaves,c->db->id,c->argv,c->argc);

@@ -414,6 +414,10 @@ void freeClient(redisClient *c) {
     ln = listSearchKey(server.clients,c);
     redisAssert(ln != NULL);
     listDelNode(server.clients,ln);
+    /* */
+    if (c->flags & REDIS_AOF_WAIT) {
+        server.aof_group_pending--;
+    }
     /* Remove from the list of clients waiting for swapped keys, or ready
      * to be restarted, but not yet woken up again. */
     if (c->flags & REDIS_IO_WAIT) {
@@ -472,6 +476,10 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     robj *o;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
+
+    /* Don't send the reply buffer until the AOF file is written */
+    if (c->flags & REDIS_AOF_WAIT)
+        return;
 
     /* Use writev() if we have enough buffers to send */
     if (!server.glueoutputbuf &&
@@ -673,7 +681,7 @@ again:
      * would not be called at all, but after the execution of the first commands
      * in the input buffer the client may be blocked, and the "goto again"
      * will try to reiterate. The following line will make it return asap. */
-    if (c->flags & REDIS_BLOCKED || c->flags & REDIS_IO_WAIT) return;
+    if (c->flags & REDIS_BLOCKED || c->flags & REDIS_IO_WAIT || c->flags & REDIS_AOF_WAIT) return;
 
     if (seeknewline && c->bulklen == -1) c->newline = strchr(c->querybuf,'\n');
     seeknewline = 1;
